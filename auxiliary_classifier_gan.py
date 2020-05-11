@@ -6,25 +6,57 @@ from keras.layers.convolutional import UpSampling2D, Conv2D
 from keras.utils.vis_utils import plot_model
 from keras.layers.advanced_activations import LeakyReLU
 
+
 def show_model(model):
     model.summary()
     plot_model(model, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
 
 
+
 class ACGAN():
     def __init__(self):
-        #input shape
+        # input shape
         self.img_rows = 28
         self.img_cols = 28
         self.channels = 1
-        self.img_shape = (self.img_rows,self.img_cols,self.channels)
+        self.img_shape = (self.img_rows, self.img_cols, self.channels)
         self.num_classes = 10
         self.latent_dim = 100
-        optimizer = Adam(0.0002,0.5)
+        optimizer = Adam(0.0002, 0.5)
         losses = ['binary_crossentropy', 'sparse_categorical_crossentropy']
         # build and compile the discriminator
-        self.generator=self.build_generator()
-        self.build_discriminator()
+        self.discriminator = self.build_discriminator()
+        self.discriminator.compile(loss=losses,optimizer=optimizer,metrics=['accuracy'])
+        # build the generator
+        self.generator = self.build_generator()
+
+        # pass noise and target label to the generator label
+        # Tensor with shape(?, 100)
+        # So the latent space is the space for noise?
+        noise = Input(shape=(self.latent_dim,))
+        # Tensor with shape(?,1)
+        label = Input(shape=(1,))
+        # Tensor with shape(?,14,14,1)
+        img = self.generator([noise,label])
+
+        # going to combine generator and discriminator as generator
+        # but setting discriminator as not trainable?
+        self.discriminator.trainable = False
+
+        # The discriminator takes generated image as input and determines validity
+        # and the label of that image
+        valid, target_label = self.discriminator(img)
+
+        # The combined model (stacked generator and discriminator)
+        # Trains the generator to fool the discriminator
+        # This model concludes generator, then discriminator
+        self.combined = Model([noise, label], [valid, target_label])
+        self.combined.compile(loss=losses,optimizer=optimizer)
+
+
+
+
+
 
 
     def build_generator(self):
@@ -54,15 +86,13 @@ class ACGAN():
         img = model(model_input)
         return Model([noise, label], img)
 
-
-
     def build_discriminator(self):
         model = Sequential()
         model.add(Conv2D(16, kernel_size=3, strides=2, input_shape=self.img_shape, padding="same"))
         model.add(LeakyReLU(alpha=0.2))
         model.add(Dropout(0.25))
         model.add(Conv2D(32, kernel_size=3, strides=2, padding="same"))
-        model.add(ZeroPadding2D(padding=((0,1),(0,1))))
+        model.add(ZeroPadding2D(padding=((0, 1), (0, 1))))
         model.add(LeakyReLU(alpha=0.2))
         model.add(Dropout(0.25))
         model.add(BatchNormalization(momentum=0.8))
@@ -70,10 +100,8 @@ class ACGAN():
         model.add(LeakyReLU(alpha=0.2))
         model.add(Dropout(0.25))
         model.add(Flatten())
-        show_model(model)
         # Tensor with shape (?,28,28,1)
         img = Input(shape=self.img_shape)
-        print(img)
         # Extract feature representation
         features = model(img)
 
@@ -82,14 +110,8 @@ class ACGAN():
         validity = Dense(1, activation="sigmoid")(features)
         # Tensor with shape (?,10)
         label = Dense(self.num_classes, activation="softmax")(features)
-        return Model(img,[validity,label])
-
+        return Model(img, [validity, label])
 
 
 if __name__ == '__main__':
     auxiliary_classifier_gan = ACGAN()
-
-
-
-
-
