@@ -5,12 +5,13 @@ from keras.layers import BatchNormalization, Activation, Embedding, ZeroPadding2
 from keras.layers.convolutional import UpSampling2D, Conv2D
 from keras.utils.vis_utils import plot_model
 from keras.layers.advanced_activations import LeakyReLU
+from keras.datasets import mnist
+import numpy as np
 
 
 def show_model(model):
     model.summary()
     plot_model(model, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
-
 
 
 class ACGAN():
@@ -26,7 +27,7 @@ class ACGAN():
         losses = ['binary_crossentropy', 'sparse_categorical_crossentropy']
         # build and compile the discriminator
         self.discriminator = self.build_discriminator()
-        self.discriminator.compile(loss=losses,optimizer=optimizer,metrics=['accuracy'])
+        self.discriminator.compile(loss=losses, optimizer=optimizer, metrics=['accuracy'])
         # build the generator
         self.generator = self.build_generator()
 
@@ -37,7 +38,7 @@ class ACGAN():
         # Tensor with shape(?,1)
         label = Input(shape=(1,))
         # Tensor with shape(?,14,14,1)
-        img = self.generator([noise,label])
+        img = self.generator([noise, label])
 
         # going to combine generator and discriminator as generator
         # but setting discriminator as not trainable?
@@ -51,13 +52,7 @@ class ACGAN():
         # Trains the generator to fool the discriminator
         # This model concludes generator, then discriminator
         self.combined = Model([noise, label], [valid, target_label])
-        self.combined.compile(loss=losses,optimizer=optimizer)
-
-
-
-
-
-
+        self.combined.compile(loss=losses, optimizer=optimizer)
 
     def build_generator(self):
         model = Sequential()
@@ -112,6 +107,33 @@ class ACGAN():
         label = Dense(self.num_classes, activation="softmax")(features)
         return Model(img, [validity, label])
 
+    # introduce sampling interval to produce random selection
+    def train(self, epochs, batch_size=128, sample_interval=50):
+        # who does not like mnist
+        # already numpy array
+        # X_train shape by (6000,28,28)
+        # y_train shape by (6000,)
+        (X_train, y_train), (_, _) = mnist.load_data()
+
+        # data pre-manipulation
+        # normalize to float between -1 and 1
+        X_train = (X_train.astype(np.float32)-127.5)/127.5
+        # same as expand dim axis = -1
+        # X_train shape by (6000,28,28,1)
+        X_train = np.expand_dims(X_train,axis=3)
+        # shape by (6000,1)
+        y_train = y_train.reshape(-1,1)
+
+        # adversarial ground truths
+        # valid shape by (32,1)
+        # fake shape by (32,1)
+        valid = np.ones((batch_size,1))
+        fake = np.zeros((batch_size,1))
+
 
 if __name__ == '__main__':
     auxiliary_classifier_gan = ACGAN()
+    # training 14000 times,
+    # each time 32 samples
+    # every sample 200 interval from the next
+    auxiliary_classifier_gan.train(epochs=14000,batch_size=32,sample_interval=200)
