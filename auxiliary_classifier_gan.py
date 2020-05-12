@@ -67,6 +67,7 @@ class ACGAN():
         # Trains the generator to fool the discriminator
         # This model concludes generator, then discriminator
         self.combined = Model([noise, label], [valid, target_label])
+        show_model(self.combined)
         self.combined.compile(loss=losses, optimizer=optimizer)
 
     def build_generator(self):
