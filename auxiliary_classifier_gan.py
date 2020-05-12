@@ -7,11 +7,25 @@ from keras.utils.vis_utils import plot_model
 from keras.layers.advanced_activations import LeakyReLU
 from keras.datasets import mnist
 import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+import sys
+import os
+import random
 
 
 def show_model(model):
     model.summary()
     plot_model(model, to_file='model_plot.png', show_shapes=True, show_layer_names=True)
+
+
+# read in gray scale
+def load_image(file_path):
+    return cv2.imread(file_path, 0)
+
+
+def extract_label(file_name):
+    return 1 if "open" in file_name else 0  # open eyes are 1 & closed eyes are 0
 
 
 class ACGAN():
@@ -41,7 +55,8 @@ class ACGAN():
         img = self.generator([noise, label])
 
         # going to combine generator and discriminator as generator
-        # but setting discriminator as not trainable?
+        # the discriminator compiled before, is trained
+        # the combined model, to use for generate, is not trainable anymore
         self.discriminator.trainable = False
 
         # The discriminator takes generated image as input and determines validity
@@ -69,6 +84,7 @@ class ACGAN():
         model.add(Conv2D(64, kernel_size=3, padding="same"))
         model.add(Activation("relu"))
         model.add(BatchNormalization(momentum=0.8))
+        model.add(UpSampling2D())
         model.add(Conv2D(self.channels, kernel_size=3, padding='same'))
         model.add(Activation("tanh"))
         # A tensor with shape (?, 100)
@@ -108,32 +124,117 @@ class ACGAN():
         return Model(img, [validity, label])
 
     # introduce sampling interval to produce random selection
-    def train(self, epochs, batch_size=128, sample_interval=50):
+    def train(self, epochs, batch_size=32, sample_interval=50):
         # who does not like mnist
         # already numpy array
         # X_train shape by (6000,28,28)
         # y_train shape by (6000,)
-        (X_train, y_train), (_, _) = mnist.load_data()
+        # (X_train, y_train), (_, _) = mnist.load_data()
+        '''substitute to train eye images '''
+        img_path = "./BW28x28/"
+        img_files = []
+        # there was a ghost file getting added to this
+        for file in os.listdir(img_path):
+            if file.endswith(".png"):
+                img_files.append(file)
+
+        random.shuffle(img_files)
+        # load all images from folder, split them later
+        X_train = np.asarray([load_image(img_path + file) for file in img_files])
+        y_train = np.asarray ([extract_label(file) for file in img_files])
+        '''substitute to train eye images '''
 
         # data pre-manipulation
         # normalize to float between -1 and 1
-        X_train = (X_train.astype(np.float32)-127.5)/127.5
+        X_train = (X_train.astype(np.float32) - 127.5) / 127.5
         # same as expand dim axis = -1
         # X_train shape by (6000,28,28,1)
-        X_train = np.expand_dims(X_train,axis=3)
+        X_train = np.expand_dims(X_train, axis=3)
         # shape by (6000,1)
-        y_train = y_train.reshape(-1,1)
+        y_train = y_train.reshape(-1, 1)
 
         # adversarial ground truths
         # valid shape by (32,1)
         # fake shape by (32,1)
-        valid = np.ones((batch_size,1))
-        fake = np.zeros((batch_size,1))
+        valid = np.ones((batch_size, 1))
+        fake = np.zeros((batch_size, 1))
+
+        for epoch in range(epochs):
+            # select a random batch of images
+            # random batch_size ints that is between 0 to 60000
+            idx = np.random.randint(0, X_train.shape[0], batch_size)
+            # imgs shape by (32, 28, 28, 1)
+            imgs = X_train[idx]
+
+            # sample noise as generator input
+            # noise shape by (32, 100), mean 0, standard deviation 1
+            noise = np.random.normal(0, 1, (batch_size, self.latent_dim))
+
+            # The labels of the digits that generator tries to create
+            # initialized to random, let it blind guess first
+            # shaped by (32,1)
+            sampled_labels = np.random.randint(0, 10, (batch_size, 1))
+            # generate a batch of the new images
+            # gen_imgs shape by (32, 14, 14, 1)
+            gen_imgs = self.generator.predict([noise, sampled_labels])
+
+            # the legit image labels
+            # img_labels shape by (32, 1)
+            img_labels = y_train[idx]
+
+            # train the discriminator
+            d_loss_real = self.discriminator.train_on_batch(imgs, [valid, img_labels])
+            d_loss_fake = self.discriminator.train_on_batch(gen_imgs, [fake, sampled_labels])
+            d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+
+            # train the combined generator
+            # generator loss
+            g_loss = self.combined.train_on_batch([noise, sampled_labels], [valid, sampled_labels])
+
+            # plot the progress
+            print("%d [D loss: %f, acc.: %.2f%%, op_acc: %.2f%%] [G loss: %f]" % (
+            epoch, d_loss[0], 100 * d_loss[3], 100 * d_loss[4], g_loss[0]))
+
+            # if at save interval => save generated image samples
+            if epoch % sample_interval == 0:
+                self.save_model()
+                self.sample_image(epoch)
+
+    def sample_image(self, epoch):
+        r, c = 10, 10
+        noise = np.random.normal(0, 1, (r * c, self.latent_dim))
+        sampled_labels = np.array([num for _ in range(r) for num in range(c)])
+        gen_imgs = self.generator.predict([noise, sampled_labels])
+        # Rescale images 0 - 1
+        gen_imgs = 0.5 * gen_imgs + 0.5
+
+        fig, axs = plt.subplots(r, c)
+        cnt = 0
+        for i in range(r):
+            for j in range(c):
+                axs[i, j].imshow(gen_imgs[cnt, :, :, 0], cmap='gray')
+                axs[i, j].axis('off')
+                cnt += 1
+        fig.savefig("images/%d.png" % epoch)
+        plt.close()
+
+    def save_model(self):
+        def save(model, model_name):
+            model_path = "saved_model/%s.json" % model_name
+            weights_path = "saved_model/%s_weights.hdf5" % model_name
+            options = {"file_arch": model_path,
+                       "file_weight": weights_path}
+            json_string = model.to_json()
+            open(options['file_arch'], 'w').write(json_string)
+            model.save_weights(options['file_weight'])
+
+        save(self.generator, "generator")
+        save(self.discriminator, "discriminator")
 
 
 if __name__ == '__main__':
     auxiliary_classifier_gan = ACGAN()
     # training 14000 times,
     # each time 32 samples
-    # every sample 200 interval from the next
-    auxiliary_classifier_gan.train(epochs=14000,batch_size=32,sample_interval=200)
+    # save every generated sample 200 interval from the next
+    auxiliary_classifier_gan.train(epochs=14000, batch_size=16, sample_interval=200)
